@@ -1,0 +1,57 @@
+name: CI
+
+# Once for each commit pushed, on any branch, and for pull requests from forks (a branch of this
+# repository was tested when it was pushed). Not for a change of documentation alone. The tests
+# include the sampler's exactness tests and segmentations of simulated tissues scored against
+# their truth; the pinned digest checks that a seed gives the same bytes on this runner's amd64 as
+# on the arm64 it was pinned on.
+on:
+  push:
+    branches: ['**']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'NOTICE']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'NOTICE']
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "Files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      # The sampler's tests take a few minutes under the race detector on a shared runner.
+      - name: go test
+        run: go test -race -timeout 30m ./...
+      - name: Cross-compile
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go build -o /dev/null ./cmd/situseg
+          done
+      - name: The benchmark on the small simulated tissue
+        run: |
+          go build -o situseg ./cmd/situseg
+          ./situseg simulate -preset small "$RUNNER_TEMP/small.parquet"
+          ./situseg -quiet -o "$RUNNER_TEMP/small-seg" "$RUNNER_TEMP/small.parquet"
+          ./situseg score "$RUNNER_TEMP/small.parquet" "$RUNNER_TEMP/small-seg"

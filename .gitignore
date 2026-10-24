@@ -1,0 +1,5 @@
+/situseg
+/cmd/situseg/situseg
+/situseg-output/
+*.test
+*.prof
